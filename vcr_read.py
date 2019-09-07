@@ -38,6 +38,10 @@ class VCRReader:
         self.filename = filename
         self.target = target
 
+        self.watched_driver = 'davewaldron68'
+        self.watched_driver = 'Seven Smiles (VR)'
+        self.max_rpm = 0
+
         self.vcr_file = open(self.filename, 'rb')
 
         # read the first two bytes, if they match the gzip magic number, re-open as a gzip file
@@ -128,8 +132,12 @@ class VCRReader:
         if str_length == 0:
             str_length = self.read_integer(int_length)
         string = self.vcr_file.read(str_length)
-
-        return string.decode('utf-8')
+        try:
+            res = string.decode('utf-8')
+        except Exception as e:
+            print(e)
+            res = ''
+        return res
 
     def read_until(self, char):
         b = b''
@@ -158,10 +166,22 @@ class VCRReader:
         rot_y = self.read_float()
         rot_z = self.read_float()
 
-        steer_yaw = info1 & 127
-        throttle = info1 >> 11 & 63
+        """
+        Info 1 details (first unsigned int)
+        Bytes 	Info
+        XXXXXXXX XXXXXX00 00000000 00000000 	Current RPM (14 bits)
+        00000000 000000X0 00000000 00000000 	In pit lane flag (1 bit)
+        00000000 0000000X XXXXX000 00000000 	Throttle (6 bits)
+        00000000 00000000 00000X00 00000000 	Horn (1 bit)
+        00000000 00000000 000000XX XXXXXXXX 	Steer yaw (10 bits)
+        """
         engine_rpm = info1 >> 18
-        in_pit = (info1 >> 17 & 0x1) != 0
+        engine_rpm = int(engine_rpm / 0.75)  # fudge factor is to try to get
+        # RPM to the right sort of number, / 0.75 is sort of OK for 9200 rev limit
+        in_pit = (info1 & (0x1<<17)) != 0
+        throttle = (info1 >> 11) & 0x3F
+        horn = (info1 & (0x1<<10)) != 0
+        steer_yaw = info1 & 0x3FF
 
         detachable_part_state = info2 & 0x3ff
 
@@ -169,6 +189,9 @@ class VCRReader:
             driver = self.drivers[driver_id]
             driver_name = driver.driver_name()
             if driver.running:
+                if driver_name==self.watched_driver and engine_rpm>self.max_rpm:
+                    self.max_rpm = engine_rpm
+                    print(f'{engine_rpm}')
                 if detachable_part_state != driver.detachable_part_state:
                     driver.last_detachable_part_state = driver.detachable_part_state
                     driver.detachable_part_state = detachable_part_state
@@ -391,7 +414,7 @@ class VCRReader:
                         if pit_event == 36:
                             pit_data = self.vcr_file.read(
                                 event_size - 1)  # unknown data, maybe fuel, damage repaired, something else
-                            print(f'{driver_name} {pit_data} [{event_size}] ({slice_time})')
+                            print(f'{driver_name} unknown data: {pit_data} [event_size: {event_size}] ({slice_time})')
                         event_desc = self.pit_events.get(pit_event, pit_event)
                         # print(f'{driver_name} {event_desc} [{pit_event}/{event_size}] ({slice_time})')
                 else:
@@ -406,8 +429,13 @@ class VCRReader:
                     self.debug("ERROR!", event_size, event_type, event_class, event_driver, diff)
                     self.vcr_file.seek(next_file_pos)
 
-
-reader = VCRReader(sys.argv[1], sys.argv[2])
+try:
+    replay = sys.argv[1]
+    csv = sys.argv[2]
+except:
+    replay = r"c:\Program Files (x86)\Steam\steamapps\common\rFactor 2\UserData\Replays\RaceRfactor Spa 2013 15.Vcr"
+    csv = r"c:\temp\RaceRfactor Spa 2013 15.csv"
+reader = VCRReader(replay, csv)
 reader.parse()
 reader.dump()
 
